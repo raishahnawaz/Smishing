@@ -11,7 +11,7 @@ from pyspark.sql import SparkSession
 import re
 from pydoc import  help
 from io import StringIO
-
+from pyspark.sql.types import *
 from operator import is_not
 from functools import partial
 import importlib
@@ -21,6 +21,9 @@ sys.getdefaultencoding()
 from os import environ
 import numpy
 from collections import namedtuple
+from pyspark.ml.feature import Tokenizer, RegexTokenizer
+from pyspark.sql.functions import col,udf,when
+from pyspark.sql.types import IntegerType, StringType,ArrayType
 
 
 def loadTextFile_1(fileAddress):
@@ -39,6 +42,12 @@ def loadTextFiles_2(fileAddress):
     df = spark.read.load(fileAddress,format="csv", sep="|", inferSchema="true", header="true")
     return df
 
+def Truecounts(wordsList):
+    if (wordsList.isEmpty()) | (wordsList is None):
+        l=0
+    else:
+            l=len(wordsList)
+    return  l
 
 if __name__ == '__main__':
 
@@ -66,10 +75,9 @@ if __name__ == '__main__':
     Messages=loadTextFiles_2("C:/Users/Rai Shahnawaz/Desktop/FINTECH PROJECTS/SMS Fraud Detection in DFS Pakistan/Data And Statistics/Data/Data 06-04-2018/messages.txt")
 
 
-    Users.show()
-    Threads.show()
-    Messages.show()
-
+    # Users.show()
+    # Threads.show()
+    # Messages.show()
 
     #Creating Temporary Views for these dataframes : Views Life will end with the sparksession termination
 
@@ -81,4 +89,27 @@ if __name__ == '__main__':
     DateWiseUsers=spark.sql(UsersCount)
     DateWiseUsers.show()
 
+
+    #Tokenzing Sentences into words
+    tokenizer = Tokenizer(inputCol="body", outputCol="words")
+    countTokens = udf(lambda words: len(words))
+    tokenized = tokenizer.transform(Messages.na.drop(subset=["body"]))
+
+
+    print("Tokenized Words ",tokenized.select("body",col("words")).show())
+
+    #tokenized=tokenized.withColumn("TestColumn",countTokens(F.lit("words")))
+    tokenized=tokenized.withColumn("tokens",countTokens(F.col("words")))
+
+    tokenized.select("words","tokens").show()
+
+
+
+
+    #tokenized=tokenized.withColumn("tokens",countTokens(col("TestColumn")))
+    #tokenized.printSchema()
+    #tokenized.select("words","tokens").show()
+
+    #pandastokenized=tokenized.toPandas()
+    #pandastokenized.select("tokens").show()
 
