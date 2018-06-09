@@ -25,7 +25,6 @@ from pyspark.ml.feature import Tokenizer, RegexTokenizer
 from pyspark.sql.functions import col,udf,when
 from pyspark.sql.types import IntegerType, StringType,ArrayType
 
-
 def loadTextFile_1(fileAddress):
     rawTextRdd = spark.sparkContext.textFile(fileAddress)
     user= namedtuple("user",
@@ -38,9 +37,11 @@ def loadTextFile_1(fileAddress):
 
     return UserData.toDF()
 
-def loadTextFiles_2(fileAddress):
-    df = spark.read.load(fileAddress,format="csv", sep="|", inferSchema="true", header="true")
+def loadTextFiles_2(fileAddress,delimiter):
+    df = spark.read.load(fileAddress,format="csv", sep=delimiter, inferSchema="true", header="true")
     return df
+
+
 
 def Truecounts(wordsList):
     if (wordsList.isEmpty()) | (wordsList is None):
@@ -71,13 +72,21 @@ if __name__ == '__main__':
 
     sqlContext=SQLContext(sparkContext=spark)
     Users=loadTextFile_1("C:/Users/Rai Shahnawaz/Desktop/FINTECH PROJECTS/SMS Fraud Detection in DFS Pakistan/Data And Statistics/Data/Data 06-04-2018/users.txt")
-    Threads=loadTextFiles_2("C:/Users/Rai Shahnawaz/Desktop/FINTECH PROJECTS/SMS Fraud Detection in DFS Pakistan/Data And Statistics/Data/Data 06-04-2018/threads.txt")
-    Messages=loadTextFiles_2("C:/Users/Rai Shahnawaz/Desktop/FINTECH PROJECTS/SMS Fraud Detection in DFS Pakistan/Data And Statistics/Data/Data 06-04-2018/messages.txt")
+    Threads=loadTextFiles_2("C:/Users/Rai Shahnawaz/Desktop/FINTECH PROJECTS/SMS Fraud Detection in DFS Pakistan/Data And Statistics/Data/Data 06-04-2018/threads.txt","|")
+    #Messages=loadTextFiles_2("C:/Users/Rai Shahnawaz/Desktop/FINTECH PROJECTS/SMS Fraud Detection in DFS Pakistan/Data And Statistics/Data/Data 06-04-2018/messages.txt","|")
+
+    query = """
+      (select id, thread_uid_id, creator, body from sms_storage_services_smsmms) foo
+    """
+    Messages=sqlContext.read.format("jdbc").options(url="jdbc:sqlite:C:/Users/Rai Shahnawaz/Desktop/FINTECH PROJECTS/SMS Fraud Detection in DFS Pakistan/Data And Statistics/Data/Data 06-04-2018/db.sqlite3", \
+                                           driver="org.sqlite.JDBC",
+                                           dbtable=query).load()
 
 
-    # Users.show()
-    # Threads.show()
-    # Messages.show()
+
+    #Users.show()
+    #Threads.show()
+    Messages.show()
 
     #Creating Temporary Views for these dataframes : Views Life will end with the sparksession termination
 
@@ -85,31 +94,42 @@ if __name__ == '__main__':
     Threads.createOrReplaceTempView("threads")
     Messages.createOrReplaceTempView("messages")
 
+
     UsersCount="select count(*), date(date_created) from users group by 2 order by 1 desc"
     DateWiseUsers=spark.sql(UsersCount)
     DateWiseUsers.show()
 
+    Query2="select m.*, t.label from threads t inner join messages m on t.thread_uid=m.thread_uid_id"
+    LabeledMessages=spark.sql(Query2)
+
+    print ("Users Count: ", Users.count())
+    print ("Threads Count: ", Threads.count())
+    print ("Count of Messages: ", Messages.count())
+    print ("Count of Labeled Messages: ", LabeledMessages.count())
+
+
 
     #Tokenzing Sentences into words
+
     tokenizer = Tokenizer(inputCol="body", outputCol="words")
     countTokens = udf(lambda words: len(words))
-    tokenized = tokenizer.transform(Messages.na.drop(subset=["body"]))
-
-
-    print("Tokenized Words ",tokenized.select("body",col("words")).show())
-
+    tokenized = tokenizer.transform(LabeledMessages.na.drop(subset=["body"]))
+    #print("Tokenized Words ",tokenized.select("body",col("words")).show())
     #tokenized=tokenized.withColumn("TestColumn",countTokens(F.lit("words")))
     tokenized=tokenized.withColumn("tokens",countTokens(F.col("words")))
-
     tokenized.select("words","tokens").show()
 
+    print ("After dropping Null Labeled Messages: ", LabeledMessages.count())
 
+    #Transforming words into feature vectors
 
+    from pyspark.ml.feature import HashingTF, IDF, Tokenizer
 
-    #tokenized=tokenized.withColumn("tokens",countTokens(col("TestColumn")))
-    #tokenized.printSchema()
-    #tokenized.select("words","tokens").show()
+    hashingTF = HashingTF(inputCol="words", outputCol="rawFeatures", numFeatures=2048)
+    featurizedData = hashingTF.transform(tokenized)
+    idf = IDF(inputCol="rawFeatures", outputCol="features")
+    idfModel = idf.fit(featurizedData)
+    rescaledData = idfModel.transform(featurizedData)
+    rescaledData.select("label", "features").show()
 
-    #pandastokenized=tokenized.toPandas()
-    #pandastokenized.select("tokens").show()
 

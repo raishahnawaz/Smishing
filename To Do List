@@ -1,0 +1,18 @@
+
+#1 Overall Statistics for messages in each category
+#2 Statistics After Exact Duplications Removal
+#3 Duplicates identification and using similarity measures (clustering)
+#4 Stop words and punctuations removal
+#5 Scam Categorization: before removing duplicates
+#6 English vs Other fonts
+#7 Roman vs English text separation (English Font)
+#8 Messages Length Heuristic
+#9 Roman Urdu Standardization
+
+
+
+Train Model with Bag of Words (Naive Bayes Classifier)
+
+Tokenization: Spaces
+
+
