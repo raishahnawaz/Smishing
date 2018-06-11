@@ -1,5 +1,6 @@
+from pyspark.ml.evaluation import MulticlassClassificationEvaluator
 from pyspark.ml import Pipeline
-from pyspark.ml.classification import LogisticRegression
+from pyspark.ml.classification import LogisticRegression,NaiveBayes
 from pyspark.ml.evaluation import BinaryClassificationEvaluator
 from pyspark.ml.feature import HashingTF, Tokenizer
 from pyspark.ml.tuning import CrossValidator, ParamGridBuilder
@@ -114,22 +115,91 @@ if __name__ == '__main__':
     tokenizer = Tokenizer(inputCol="body", outputCol="words")
     countTokens = udf(lambda words: len(words))
     tokenized = tokenizer.transform(LabeledMessages.na.drop(subset=["body"]))
-    #print("Tokenized Words ",tokenized.select("body",col("words")).show())
-    #tokenized=tokenized.withColumn("TestColumn",countTokens(F.lit("words")))
     tokenized=tokenized.withColumn("tokens",countTokens(F.col("words")))
     tokenized.select("words","tokens").show()
 
-    print ("After dropping Null Labeled Messages: ", LabeledMessages.count())
+    print ("After dropping Null Messages: ", tokenized.count())
 
-    #Transforming words into feature vectors
+    #Transforming words into feature vectors and Label as LabelIndex
 
     from pyspark.ml.feature import HashingTF, IDF, Tokenizer
 
-    hashingTF = HashingTF(inputCol="words", outputCol="rawFeatures", numFeatures=2048)
+    hashingTF = HashingTF(inputCol="words", outputCol="rawFeatures")
     featurizedData = hashingTF.transform(tokenized)
+
     idf = IDF(inputCol="rawFeatures", outputCol="features")
     idfModel = idf.fit(featurizedData)
     rescaledData = idfModel.transform(featurizedData)
-    rescaledData.select("label", "features").show()
+
+    rescaledData.cube("label").count().orderBy("label").show()
+
+    from pyspark.ml.feature import StringIndexer
+    indexer = StringIndexer(inputCol="label", outputCol="LabelIndex")
+    indexed = indexer.fit(rescaledData).transform(rescaledData.na.drop(subset=["label"]))
+
+    print ("Labeled Messages: ", indexed.count())
+    # print ("OK Messages: ", indexed["label"]=="OK")
+    # print ("FRAUD Messages: ", indexed.count(indexed["label"]=="FRAUD"))
+    # print ("SPAM Messages: ", indexed.count(indexed["label"]=="SPAM"))
+
+    indexed.cube("label").count().orderBy("label").na.drop(subset=["label"]).show()
+
+    print ("Indexed Schema: ", indexed.schema)
+    print ("Labeled Data: ", indexed.count())
+
+    indexed.select("LabelIndex", "features").show()
+    nb=NaiveBayes()
+    nb.setLabelCol("LabelIndex")
+    nb.setPredictionCol("Label_Prediction")
 
 
+    training, test = indexed.randomSplit([0.9, 0.1], seed=11)
+    nvModel = nb.fit(training)
+    prediction = nvModel.transform(test)
+
+
+    selected = prediction.select("body", "LabelIndex", "label", "Label_Prediction")
+    for row in selected.collect():
+        print(row)
+
+    from pyspark.mllib.evaluation import MulticlassMetrics
+
+    predictionAndLabels =  prediction.select("Label_Prediction","LabelIndex").rdd.map(lambda r:(float(r[0]),float(r[1])))
+
+    #predictionAndLabels = test.rdd.map(lambda lp: (float(nvModel.predict(lp.features)), lp.label))
+    metrics = MulticlassMetrics(predictionAndLabels)
+
+    precision = metrics.precision()
+    recall = metrics.recall()
+    f1Score = metrics.fMeasure()
+    print("Summary Stats")
+    print("Precision = %s" % precision)
+    print("Recall = %s" % recall)
+    print("F1 Score = %s" % f1Score)
+
+    #Statistics by class
+    labels = prediction.rdd.map(lambda lp: lp.label).distinct().collect()
+    labelIndices = prediction.rdd.map(lambda lp: lp.LabelIndex).distinct().collect()
+    labelIndicesPairs = prediction.rdd.map(lambda lp: (lp.label,lp.LabelIndex)).distinct().collect()
+
+    print(labels)
+    print(labelIndices)
+    print(labelIndicesPairs)
+
+
+
+    for label,labelIndex in sorted(labelIndicesPairs):
+        print("\n")
+        print("Class %s precision = %s" % (label, metrics.precision(labelIndex)))
+        print("Class %s recall = %s" % (label, metrics.recall(labelIndex)))
+        print("Class %s F1 Measure = %s" % (label, metrics.fMeasure(labelIndex, beta=1.0)))
+
+    # Weighted stats
+    print("Weighted recall = %s" % metrics.weightedRecall)
+    print("Weighted precision = %s" % metrics.weightedPrecision)
+    print("Weighted F(1) Score = %s" % metrics.weightedFMeasure())
+    print("Weighted F(0.5) Score = %s" % metrics.weightedFMeasure(beta=0.5))
+    print("Weighted false positive rate = %s" % metrics.weightedFalsePositiveRate)
+
+
+    spark.stop()
