@@ -16,7 +16,6 @@ from pyspark.sql.types import *
 from operator import is_not
 from functools import partial
 import importlib
-
 importlib.reload(sys)
 sys.getdefaultencoding()
 from os import environ
@@ -25,23 +24,10 @@ from collections import namedtuple
 from pyspark.ml.feature import Tokenizer, RegexTokenizer
 from pyspark.sql.functions import col,udf,when
 from pyspark.sql.types import IntegerType, StringType,ArrayType
-
-def loadTextFile_1(fileAddress):
-    rawTextRdd = spark.sparkContext.textFile(fileAddress)
-    user= namedtuple("user",
-                          ['user_id', 'device_id','phone_number', 'phone_number_user_entered', 'phone_model', 'phone_os', 'device_api', 'app_version', 'date_created', 'created_by',
-                           'date_modified','modified_by','last_sync_date','last_ping_date','label_counts','user_email'])
-
-    UserData = rawTextRdd.map(lambda para: para.split("|")).filter(lambda line: line[0] != 'user_id') \
-        .map(lambda line: user(line[0], line[1], line[2],line[3], line[4],line[5],line[6], line[7],line[8],line[9],line[10],line[11],line[12],line[13]
-                                   ,line[14],line[15]))
-
-    return UserData.toDF()
-
-def loadTextFiles_2(fileAddress,delimiter):
-    df = spark.read.load(fileAddress,format="csv", sep=delimiter, inferSchema="true", header="true")
-    return df
-
+import Evaluation
+from LoadData import Dataload
+import ShareSparkVariables as SSV
+from pyspark.ml.feature import HashingTF, IDF, Tokenizer
 
 
 def Truecounts(wordsList):
@@ -70,10 +56,12 @@ if __name__ == '__main__':
         .config(conf=conf) \
         .getOrCreate()
 
+    SSV.ShareSparkContext(spark)
+
 
     sqlContext=SQLContext(sparkContext=spark)
-    Users=loadTextFile_1("C:/Users/Rai Shahnawaz/Desktop/FINTECH PROJECTS/SMS Fraud Detection in DFS Pakistan/Data And Statistics/Data/Data 06-04-2018/users.txt")
-    Threads=loadTextFiles_2("C:/Users/Rai Shahnawaz/Desktop/FINTECH PROJECTS/SMS Fraud Detection in DFS Pakistan/Data And Statistics/Data/Data 06-04-2018/threads.txt","|")
+    Users=Dataload.loadTextFile_1("C:/Users/Rai Shahnawaz/Desktop/FINTECH PROJECTS/SMS Fraud Detection in DFS Pakistan/Data And Statistics/Data/Data 06-04-2018/users.txt")
+    Threads=Dataload.loadTextFiles_2("C:/Users/Rai Shahnawaz/Desktop/FINTECH PROJECTS/SMS Fraud Detection in DFS Pakistan/Data And Statistics/Data/Data 06-04-2018/threads.txt","|")
     #Messages=loadTextFiles_2("C:/Users/Rai Shahnawaz/Desktop/FINTECH PROJECTS/SMS Fraud Detection in DFS Pakistan/Data And Statistics/Data/Data 06-04-2018/messages.txt","|")
 
     query = """
@@ -87,7 +75,7 @@ if __name__ == '__main__':
 
     #Users.show()
     #Threads.show()
-    Messages.show()
+    #Messages.show()
 
     #Creating Temporary Views for these dataframes : Views Life will end with the sparksession termination
 
@@ -95,11 +83,12 @@ if __name__ == '__main__':
     Threads.createOrReplaceTempView("threads")
     Messages.createOrReplaceTempView("messages")
 
-
+    # DateWise Users Count
     UsersCount="select count(*), date(date_created) from users group by 2 order by 1 desc"
     DateWiseUsers=spark.sql(UsersCount)
     DateWiseUsers.show()
 
+    # Loading Labeled Messages
     Query2="select m.*, t.label from threads t inner join messages m on t.thread_uid=m.thread_uid_id"
     LabeledMessages=spark.sql(Query2)
 
@@ -107,8 +96,6 @@ if __name__ == '__main__':
     print ("Threads Count: ", Threads.count())
     print ("Count of Messages: ", Messages.count())
     print ("Count of Labeled Messages: ", LabeledMessages.count())
-
-
 
     #Tokenzing Sentences into words
 
@@ -122,15 +109,11 @@ if __name__ == '__main__':
 
     #Transforming words into feature vectors and Label as LabelIndex
 
-    from pyspark.ml.feature import HashingTF, IDF, Tokenizer
-
     hashingTF = HashingTF(inputCol="words", outputCol="rawFeatures")
     featurizedData = hashingTF.transform(tokenized)
-
     idf = IDF(inputCol="rawFeatures", outputCol="features")
     idfModel = idf.fit(featurizedData)
     rescaledData = idfModel.transform(featurizedData)
-
     rescaledData.cube("label").count().orderBy("label").show()
 
     from pyspark.ml.feature import StringIndexer
@@ -148,58 +131,23 @@ if __name__ == '__main__':
     print ("Labeled Data: ", indexed.count())
 
     indexed.select("LabelIndex", "features").show()
-    nb=NaiveBayes()
-    nb.setLabelCol("LabelIndex")
-    nb.setPredictionCol("Label_Prediction")
 
+    #Evaluation.NaiveBayesEvaluation(indexed)
 
-    training, test = indexed.randomSplit([0.9, 0.1], seed=11)
-    nvModel = nb.fit(training)
-    prediction = nvModel.transform(test)
+    #2  Classification with Subset
 
+    OK=indexed.filter(col('label').isin(['OK']))
+    SPAM=indexed.filter(col('label').isin(['SPAM']))
+    FRAUD=indexed.filter(col('label').isin(['FRAUD']))
 
-    selected = prediction.select("body", "LabelIndex", "label", "Label_Prediction")
-    for row in selected.collect():
-        print(row)
+    print ("\n OK Count: ", OK.count())
+    OKMessages=Dataload.SubsetSelection(OK,FRAUD.count())
+    SPAMMessages=Dataload.SubsetSelection(SPAM,FRAUD.count())
+    print ("\n OK Messages Count: ", OKMessages.count())
+    BalancedDataFrame = OKMessages.union(FRAUD).union(SPAMMessages)
 
-    from pyspark.mllib.evaluation import MulticlassMetrics
-
-    predictionAndLabels =  prediction.select("Label_Prediction","LabelIndex").rdd.map(lambda r:(float(r[0]),float(r[1])))
-
-    #predictionAndLabels = test.rdd.map(lambda lp: (float(nvModel.predict(lp.features)), lp.label))
-    metrics = MulticlassMetrics(predictionAndLabels)
-
-    precision = metrics.precision()
-    recall = metrics.recall()
-    f1Score = metrics.fMeasure()
-    print("Summary Stats")
-    print("Precision = %s" % precision)
-    print("Recall = %s" % recall)
-    print("F1 Score = %s" % f1Score)
-
-    #Statistics by class
-    labels = prediction.rdd.map(lambda lp: lp.label).distinct().collect()
-    labelIndices = prediction.rdd.map(lambda lp: lp.LabelIndex).distinct().collect()
-    labelIndicesPairs = prediction.rdd.map(lambda lp: (lp.label,lp.LabelIndex)).distinct().collect()
-
-    print(labels)
-    print(labelIndices)
-    print(labelIndicesPairs)
-
-
-
-    for label,labelIndex in sorted(labelIndicesPairs):
-        print("\n")
-        print("Class %s precision = %s" % (label, metrics.precision(labelIndex)))
-        print("Class %s recall = %s" % (label, metrics.recall(labelIndex)))
-        print("Class %s F1 Measure = %s" % (label, metrics.fMeasure(labelIndex, beta=1.0)))
-
-    # Weighted stats
-    print("Weighted recall = %s" % metrics.weightedRecall)
-    print("Weighted precision = %s" % metrics.weightedPrecision)
-    print("Weighted F(1) Score = %s" % metrics.weightedFMeasure())
-    print("Weighted F(0.5) Score = %s" % metrics.weightedFMeasure(beta=0.5))
-    print("Weighted false positive rate = %s" % metrics.weightedFalsePositiveRate)
-
+    print ("Subset Data Count: ", BalancedDataFrame.count())
+    #df.filter(col('label').isin(['FRAUD'])).show()
+    Evaluation.NaiveBayesEvaluation(BalancedDataFrame)
 
     spark.stop()
