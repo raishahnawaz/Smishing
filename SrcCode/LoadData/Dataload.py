@@ -29,3 +29,14 @@ def loadTextFile_1(fileAddress):
 def loadTextFiles_2(fileAddress,delimiter):
     df = spark.read.load(fileAddress,format="csv", sep=delimiter, inferSchema="true", header="true")
     return df
+
+def loadExcel_file(fileAddress):
+    df = spark.read.format("com.crealytics.spark.excel").\
+    option("location", fileAddress). \
+        option("spark.read.simpleMode", "true"). \
+        option("treatEmptyValuesAsNulls", "true"). \
+        option("addColorColumns", "false"). \
+        option("useHeader", "true"). \
+        option("inferschema", "true"). \
+        load("com.databricks.spark.csv")
+    return df

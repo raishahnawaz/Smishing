@@ -30,6 +30,7 @@ import ShareSparkVariables as SSV
 from pyspark.ml.feature import HashingTF, IDF, Tokenizer
 
 
+
 def Truecounts(wordsList):
     if (wordsList.isEmpty()) | (wordsList is None):
         l=0
@@ -58,6 +59,7 @@ if __name__ == '__main__':
 
     SSV.ShareSparkContext(spark)
 
+    #spark.sparkContext.setLogLevel("OFF")
 
     sqlContext=SQLContext(sparkContext=spark)
     Users=Dataload.loadTextFile_1("C:/Users/Rai Shahnawaz/Desktop/FINTECH PROJECTS/SMS Fraud Detection in DFS Pakistan/Data And Statistics/Data/Data 06-04-2018/users.txt")
@@ -71,8 +73,12 @@ if __name__ == '__main__':
                                            driver="org.sqlite.JDBC",
                                            dbtable=query).load()
 
+    TrueFrauds=Dataload.loadExcel_file("C:/Users/Rai Shahnawaz/Desktop/FINTECH PROJECTS/SMS Fraud Detection in DFS Pakistan/Data And Statistics/Data/true_fraud.xlsx")
 
-
+    #TrueFrauds=TrueFrauds.select("id", "thread_uid_id", "creator", "body","label")
+    #TrueFraudsSelected=TrueFrauds.select("id","body")
+    #TrueFraudsSelected.write.option("sep", "|").option("header", "true").csv("C:/Users/Rai Shahnawaz/Desktop/FINTECH PROJECTS/SMS Fraud Detection in DFS Pakistan/Data And Statistics/Data/TrueFrauds")
+    #TrueFraudsSelected.toPandas().to_csv("C:/Users/Rai Shahnawaz/Desktop/FINTECH PROJECTS/SMS Fraud Detection in DFS Pakistan/Data And Statistics/Data/LocalTrueFrauds", sep='|')
     #Users.show()
     #Threads.show()
     #Messages.show()
@@ -90,12 +96,20 @@ if __name__ == '__main__':
 
     # Loading Labeled Messages
     Query2="select m.*, t.label from threads t inner join messages m on t.thread_uid=m.thread_uid_id"
-    LabeledMessages=spark.sql(Query2)
+    Query3="select m.*, t.label from threads t inner join messages m on t.thread_uid=m.thread_uid_id where t.label is not NULL"
+
+    OverallMessages=spark.sql(Query2)
+    LabeledMessages=spark.sql(Query3)
+
+    TrueLabeledMessages=LabeledMessages.filter(col('label').isin(['SPAM','OK']))
+    TrueLabeledMessages=TrueLabeledMessages.union(TrueFrauds.select("id", "thread_uid_id", "creator", "body","label"))
 
     print ("Users Count: ", Users.count())
     print ("Threads Count: ", Threads.count())
     print ("Count of Messages: ", Messages.count())
     print ("Count of Labeled Messages: ", LabeledMessages.count())
+    print ("Count of True Labeled Messages: ", TrueLabeledMessages.count())
+    print ("Total True Labeled Fraudulent Messages:", TrueLabeledMessages.filter(col('label').isin(['FRAUD'])).count())
 
     #Tokenzing Sentences into words
 
@@ -130,24 +144,51 @@ if __name__ == '__main__':
     print ("Indexed Schema: ", indexed.schema)
     print ("Labeled Data: ", indexed.count())
 
+
     indexed.select("LabelIndex", "features").show()
 
+    TruePipeline=Pipeline()
+    TruePipeline.setStages([tokenizer,hashingTF,idf,indexer])
+    TrueFraudsModel=TruePipeline.fit(TrueLabeledMessages.na.drop(subset=["body"]))
+
+    TrueFraudsIndexed=TrueFraudsModel.transform(TrueLabeledMessages.na.drop(subset=["body"]))
+    print ("TrueFrauds Indexed Schema: ", TrueFraudsIndexed.schema)
+    print ("TrueFrauds Count: ", TrueFraudsIndexed.count())
+    TrueFraudsIndexed.select("LabelIndex", "features").show()
+
     #Evaluation.NaiveBayesEvaluation(indexed)
+    print ("Evaluation With true labeled fraud")
+    Evaluation.NaiveBayesEvaluation(TrueFraudsIndexed)
 
     #2  Classification with Subset
+
 
     OK=indexed.filter(col('label').isin(['OK']))
     SPAM=indexed.filter(col('label').isin(['SPAM']))
     FRAUD=indexed.filter(col('label').isin(['FRAUD']))
-
     print ("\n OK Count: ", OK.count())
     OKMessages=Dataload.SubsetSelection(OK,FRAUD.count())
     SPAMMessages=Dataload.SubsetSelection(SPAM,FRAUD.count())
     print ("\n OK Messages Count: ", OKMessages.count())
     BalancedDataFrame = OKMessages.union(FRAUD).union(SPAMMessages)
-
     print ("Subset Data Count: ", BalancedDataFrame.count())
     #df.filter(col('label').isin(['FRAUD'])).show()
+    print ("Evaluation with Balanced Data Frame")
     Evaluation.NaiveBayesEvaluation(BalancedDataFrame)
+
+    # 2  Classification with True Label Subset
+
+    TOK = TrueFraudsIndexed.filter(col('label').isin(['OK']))
+    TSPAM = TrueFraudsIndexed.filter(col('label').isin(['SPAM']))
+    TFRAUD = TrueFraudsIndexed.filter(col('label').isin(['FRAUD']))
+    print("\n OK Count: ", OK.count())
+    TOKMessages = Dataload.SubsetSelection(TOK, TFRAUD.count())
+    TSPAMMessages = Dataload.SubsetSelection(TSPAM, TFRAUD.count())
+    print("\n OK Messages Count: ", TOKMessages.count())
+    TBalancedDataFrame = TOKMessages.union(TFRAUD).union(TSPAMMessages)
+    print("Subset Data Count: ", TBalancedDataFrame.count())
+    # df.filter(col('label').isin(['FRAUD'])).show()
+    print ("Evaluation with True Label Balanced Data Frame")
+    Evaluation.NaiveBayesEvaluation(TBalancedDataFrame)
 
     spark.stop()

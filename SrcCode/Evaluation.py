@@ -5,13 +5,13 @@ def NaiveBayesEvaluation(TransformedDataset):
     nb=NaiveBayes()
     nb.setLabelCol("LabelIndex")
     nb.setPredictionCol("Label_Prediction")
-    training, test = TransformedDataset.randomSplit([0.9, 0.1], seed=11)
+    training, test = TransformedDataset.randomSplit([0.8, 0.2], seed=11)
     nvModel = nb.fit(training)
     prediction = nvModel.transform(test)
 
-    selected = prediction.select("body", "LabelIndex", "label", "Label_Prediction")
-    for row in selected.collect():
-        print(row)
+    # selected = prediction.select("body", "LabelIndex", "label", "Label_Prediction")
+    # for row in selected.collect():
+    #     print(row)
 
     from pyspark.mllib.evaluation import MulticlassMetrics
 
@@ -34,9 +34,9 @@ def NaiveBayesEvaluation(TransformedDataset):
     labelIndices = prediction.rdd.map(lambda lp: lp.LabelIndex).distinct().collect()
     labelIndicesPairs = prediction.rdd.map(lambda lp: (lp.label, lp.LabelIndex)).distinct().collect()
 
-    print(labels)
-    print(labelIndices)
-    print(labelIndicesPairs)
+    print("Labels", labels)
+    print("Label Indices",labelIndices)
+    print("Label Indice Pairs",labelIndicesPairs)
 
     for label, labelIndex in sorted(labelIndicesPairs):
         print("\n Class %s precision = %s" % (label, metrics.precision(labelIndex)))
